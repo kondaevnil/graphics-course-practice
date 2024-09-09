@@ -31,24 +31,38 @@ void glew_fail(std::string_view message, GLenum error)
 const char vertex_shader_source[] =
 R"(#version 330 core
 
-const vec2 VERTICES[3] = vec2[3](
-    vec2(0.0, 1.0),
-    vec2(-sqrt(0.75), -0.5),
-    vec2( sqrt(0.75), -0.5)
+const vec2 VERTICES[8] = vec2[8](
+    vec2(0.0, 0.0),
+    vec2(-0.5, -sqrt(3)/2),
+    vec2(0.5, -sqrt(3)/2),
+    vec2(1.0, 0.0),
+    vec2(0.5, sqrt(3)/2),
+    vec2(-0.5, sqrt(3)/2),
+    vec2(-1.0, 0.0),
+    vec2(-0.5, -sqrt(3)/2)
 );
 
-const vec3 COLORS[3] = vec3[3](
+const vec3 COLORS[8] = vec3[8](
+    vec3(0.5, 0.5, 0.5),
     vec3(1.0, 0.0, 0.0),
+    vec3(1.0, 1.0, 0.0),
+    vec3(1.0, 0.0, 1.0),
     vec3(0.0, 1.0, 0.0),
-    vec3(0.0, 0.0, 1.0)
+    vec3(0.0, 1.0, 1.0),
+    vec3(0.0, 0.0, 1.0),
+    vec3(1.0, 0.0, 0.0)
 );
 
 out vec3 color;
+uniform float scale;
+//uniform float angle;
+uniform mat4 transform;
+uniform mat4 view;
 
 void main()
 {
     vec2 position = VERTICES[gl_VertexID];
-    gl_Position = vec4(position, 0.0, 1.0);
+    gl_Position = view * transform * vec4(position, 0.0, 1.0);
     color = COLORS[gl_VertexID];
 }
 )";
@@ -131,6 +145,8 @@ int main() try
     if (!gl_context)
         sdl2_fail("SDL_GL_CreateContext: ");
 
+    SDL_GL_SetSwapInterval(0);
+
     if (auto result = glewInit(); result != GLEW_NO_ERROR)
         glew_fail("glewInit: ", result);
 
@@ -143,6 +159,16 @@ int main() try
     GLuint fragment_shader = create_shader(GL_FRAGMENT_SHADER, fragment_shader_source);
 
     GLuint program = create_program(vertex_shader, fragment_shader);
+    glUseProgram(program);
+//    GLint scale_location = glGetUniformLocation(program, "scale");
+//    GLint angle_location = glGetUniformLocation(program, "angle");
+//    glUniform1f(scale_location, 0.5);
+    GLint transform_location = glGetUniformLocation(program, "transform");
+    GLint view_location = glGetUniformLocation(program, "view");
+    float time = 0.f;
+    float scale = 0.5;
+    float x = 0, y = 0;
+    float speed = 15;
 
     GLuint vao;
     glGenVertexArrays(1, &vao);
@@ -150,6 +176,8 @@ int main() try
     std::unordered_map<SDL_Scancode, bool> key_down;
 
     auto last_frame_start = std::chrono::high_resolution_clock::now();
+
+    float dt = 0.0016f;
 
     bool running = true;
     while (running)
@@ -170,6 +198,19 @@ int main() try
             break;
         case SDL_KEYDOWN:
             key_down[event.key.keysym.scancode] = true;
+
+            if (key_down[SDL_SCANCODE_LEFT]) {
+                x -= speed * dt;
+            }
+            if (key_down[SDL_SCANCODE_RIGHT]) {
+                x += speed * dt;
+            }
+            if (key_down[SDL_SCANCODE_UP]) {
+                y += speed * dt;
+            }
+            if (key_down[SDL_SCANCODE_DOWN]) {
+                y -= speed * dt;
+            }
             break;
         case SDL_KEYUP:
             key_down[event.key.keysym.scancode] = false;
@@ -180,14 +221,40 @@ int main() try
             break;
 
         auto now = std::chrono::high_resolution_clock::now();
-        float dt = std::chrono::duration_cast<std::chrono::duration<float>>(now - last_frame_start).count();
+//        float dt = std::chrono::duration_cast<std::chrono::duration<float>>(now - last_frame_start).count();
+//        std::cerr << dt << "\n";
+
+        time += dt;
         last_frame_start = now;
+
+//        float x = 0.5 * cos(time);
+//        float y = 0.5 * sin(time);
+        float aspect_ratio = (float)width / height;
+
+        float transform[16] =
+        {
+                scale * cos(time), scale * -sin(time), 0,     x, // 1 строка
+                scale * sin(time), scale * cos(time),  0,     y, // 2 строка
+                0,                 0,                  scale, 0, // 3 строка
+                0,                 0,                  0,     1, // 4 строка
+        };
+
+        float view[16] =
+        {
+                1 / aspect_ratio, 0, 0, 0,
+                0,                1, 0, 0,
+                0,                0, 1, 0,
+                0,                0, 0, 1,
+        };
 
         glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(program);
+        glUniformMatrix4fv(transform_location, 1, GL_TRUE, transform);
+        glUniformMatrix4fv(view_location, 1, GL_TRUE, view);
+
         glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 8);
 
         SDL_GL_SwapWindow(window);
     }
