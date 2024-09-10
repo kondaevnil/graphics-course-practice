@@ -168,7 +168,7 @@ int main() try
     float time = 0.f;
     float scale = 0.5;
     float x = 0, y = 0;
-    float speed = 15;
+    float speed = 5;
 
     GLuint vao;
     glGenVertexArrays(1, &vao);
@@ -177,7 +177,7 @@ int main() try
 
     auto last_frame_start = std::chrono::high_resolution_clock::now();
 
-    float dt = 0.0016f;
+//    float dt = 0.0016f;
 
     bool running = true;
     while (running)
@@ -198,19 +198,6 @@ int main() try
             break;
         case SDL_KEYDOWN:
             key_down[event.key.keysym.scancode] = true;
-
-            if (key_down[SDL_SCANCODE_LEFT]) {
-                x -= speed * dt;
-            }
-            if (key_down[SDL_SCANCODE_RIGHT]) {
-                x += speed * dt;
-            }
-            if (key_down[SDL_SCANCODE_UP]) {
-                y += speed * dt;
-            }
-            if (key_down[SDL_SCANCODE_DOWN]) {
-                y -= speed * dt;
-            }
             break;
         case SDL_KEYUP:
             key_down[event.key.keysym.scancode] = false;
@@ -221,11 +208,24 @@ int main() try
             break;
 
         auto now = std::chrono::high_resolution_clock::now();
-//        float dt = std::chrono::duration_cast<std::chrono::duration<float>>(now - last_frame_start).count();
+        float dt = std::chrono::duration_cast<std::chrono::duration<float>>(now - last_frame_start).count();
 //        std::cerr << dt << "\n";
 
         time += dt;
         last_frame_start = now;
+
+        if (key_down[SDL_SCANCODE_LEFT]) {
+            x -= speed * dt;
+        }
+        if (key_down[SDL_SCANCODE_RIGHT]) {
+            x += speed * dt;
+        }
+        if (key_down[SDL_SCANCODE_UP]) {
+            y += speed * dt;
+        }
+        if (key_down[SDL_SCANCODE_DOWN]) {
+            y -= speed * dt;
+        }
 
 //        float x = 0.5 * cos(time);
 //        float y = 0.5 * sin(time);
