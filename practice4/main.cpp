@@ -347,10 +347,6 @@ int main() try
     auto last_frame_start = std::chrono::high_resolution_clock::now();
 
     float time = 0.f;
-    float near = 0.01f;
-    float far = 140.f;
-    float right = near;
-    float top = right * static_cast<float>(height) / static_cast<float>(width);
     float scale = 0.5;
 
     std::map<SDL_Keycode, bool> button_down;
@@ -396,8 +392,11 @@ int main() try
             0.f, 0.f, 1.f, -3.f,
             0.f, 0.f, 0.f, 1.f
         );
+        float near = 0.01f;
+        float far = 140.f;
+        float right = near;
+        float top = right * static_cast<float>(height) / static_cast<float>(width);
         auto p = mth::matr<float>::Frustum(right, top, near, far);
-        auto vp = p * v;
 
         glUseProgram(program);
 
@@ -408,7 +407,6 @@ int main() try
         for (auto &b: obj) {
             b.response(dt, button_down);
             b.transform = mth::matr<float>::Translate(b.bunny_x + cnt++, b.bunny_y, 0) * mth::matr<float>::Scale(scale) * b.transform;
-            auto wvp = vp * b.transform; // теперь можно передавать лишь одну матрицу на шейдер
 
             glBindVertexArray(b.vao);
             glUniformMatrix4fv(model_location, 1, GL_TRUE, b.transform);
