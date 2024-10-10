@@ -57,8 +57,7 @@ void main()
 const char fragment_shader_source[] =
 R"(#version 330 core
 
-uniform sampler2D tex0;
-uniform sampler2D tex1;
+uniform sampler2D tex;
 uniform float time;
 
 in vec3 normal;
@@ -70,7 +69,7 @@ in vec2 texcoord;
 void main()
 {
     float lightness = 0.5 + 0.5 * dot(normalize(normal), normalize(vec3(1.0, 2.0, 3.0)));
-    vec4 albedo = texture(tex1, texcoord + sin(time));
+    vec4 albedo = texture(tex, texcoord + sin(time));
     out_color = lightness * albedo;
 }
 )";
@@ -160,8 +159,7 @@ int main() try
 
     GLuint viewmodel_location = glGetUniformLocation(program, "viewmodel");
     GLuint projection_location = glGetUniformLocation(program, "projection");
-    GLuint tex0_location = glGetUniformLocation(program, "tex0");
-    GLuint tex1_location = glGetUniformLocation(program, "tex1");
+    GLuint tex_location = glGetUniformLocation(program, "tex");
     GLuint time_location = glGetUniformLocation(program, "time");
 
     std::string project_root = PROJECT_ROOT;
@@ -311,11 +309,11 @@ int main() try
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, tex0);
-        glUniform1i(tex0_location, 0);
+        glUniform1i(tex_location, 0);
 
         glActiveTexture(GL_TEXTURE0 + 1);
         glBindTexture(GL_TEXTURE_2D, tex1);
-        glUniform1i(tex1_location, 1);
+        glUniform1i(tex_location, 1);
 
         glBindVertexArray(vao);
         glDrawElements(GL_TRIANGLES, cow.indices.size(), GL_UNSIGNED_INT, (void *)(0));
