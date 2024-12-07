@@ -19,20 +19,20 @@
 
 #define GLM_FORCE_SWIZZLE
 #define GLM_ENABLE_EXPERIMENTAL
-#include <glm/vec3.hpp>
-#include <glm/mat4x4.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/ext/scalar_constants.hpp>
-#include <glm/gtx/quaternion.hpp>
-#include <glm/gtx/string_cast.hpp>
+#include "glm/vec3.hpp"
+#include "glm/mat4x4.hpp"
+#include "glm/ext/matrix_transform.hpp"
+#include "glm/ext/matrix_clip_space.hpp"
+#include "glm/ext/scalar_constants.hpp"
+#include "glm/gtx/quaternion.hpp"
+#include "glm/gtx/string_cast.hpp"
 
 #include "obj_parser.hpp"
 #include "stb_image.h"
 
 std::string to_string(std::string_view str)
 {
-    return std::string(str.begin(), str.end());
+    return {str.begin(), str.end()};
 }
 
 void sdl2_fail(std::string_view message)
@@ -45,7 +45,7 @@ void glew_fail(std::string_view message, GLenum error)
     throw std::runtime_error(to_string(message) + reinterpret_cast<const char *>(glewGetErrorString(error)));
 }
 
-const char vertex_shader_source[] =
+constexpr char vertex_shader_source[] =
 R"(#version 330 core
 
 uniform mat4 view;
@@ -65,13 +65,14 @@ void main()
 }
 )";
 
-const char fragment_shader_source[] =
+constexpr char fragment_shader_source[] =
 R"(#version 330 core
 
 uniform vec3 camera_position;
 uniform vec3 light_direction;
 uniform vec3 bbox_min;
 uniform vec3 bbox_max;
+uniform sampler3D tex;
 
 layout (location = 0) out vec4 out_color;
 
@@ -111,9 +112,54 @@ const float PI = 3.1415926535;
 
 in vec3 position;
 
+float get_density(vec3 p)
+{
+    return texture(tex, (p - bbox_min) / (bbox_max - bbox_min)).r;
+}
+
 void main()
 {
-    out_color = vec4(1.0, 0.5, 0.5, 1.0);
+    vec3 direction = normalize(position - camera_position);
+    vec2 t = intersect_bbox(camera_position, direction);
+    float tmin = max(t.x, 0);
+    float tmax = t.y;
+    float absorption = 0.5;
+    float scattering = 4.0;
+    float extinction = absorption + scattering;
+    vec3 light_color = vec3(16.0);
+    vec3 color = vec3(0.0);
+    vec3 ambient_light = 1.0 * vec3(0.6, 0.8, 1.0);
+
+    // float optical_depth = (tmax - tmin) * absorption;
+
+    float optical_depth = 0;
+    int steps = 50;
+    float step_size = (tmax - tmin) / steps;
+    int inner_steps = 10;
+    for (int i = 0; i < steps; ++i)
+    {
+        float t = tmin + step_size * (i + 0.5);
+        vec3 p = camera_position + direction * t;
+        float light_optical_depth = 0;
+        vec2 s = intersect_bbox(p, light_direction);
+        float smin = max(s.x, 0);
+        float smax = s.y;
+        float ds = (smax - smin) / inner_steps;
+        for (int j = 0; j < inner_steps; j++) {
+            float sp = smin + ds * (j + 0.5);
+            vec3 light_p = p + light_direction * sp;
+            light_optical_depth += get_density(light_p) * ds;
+        }
+
+        float density = get_density(p);
+        optical_depth += density * step_size * extinction;
+
+        color += (light_color * exp(-light_optical_depth) + ambient_light) * exp(-optical_depth) * step_size * density * scattering / 4.0 / PI;
+    }
+
+    float opacity = 1 - exp(-optical_depth);
+
+    out_color = vec4(color, opacity);
 }
 )";
 
@@ -236,6 +282,7 @@ int main() try
     GLuint bbox_max_location = glGetUniformLocation(program, "bbox_max");
     GLuint camera_position_location = glGetUniformLocation(program, "camera_position");
     GLuint light_direction_location = glGetUniformLocation(program, "light_direction");
+    GLuint texture_location = glGetUniformLocation(program, "tex");
 
     GLuint vao, vbo, ebo;
     glGenVertexArrays(1, &vao);
@@ -254,6 +301,24 @@ int main() try
 
     const std::string project_root = PROJECT_ROOT;
     const std::string cloud_data_path = project_root + "/cloud.data";
+
+    std::vector<char> pixels(128 * 64 * 64);
+    std::ifstream input(cloud_data_path, std::ios::binary);
+    if (!input)
+        throw std::runtime_error("Failed to open file: " + cloud_data_path);
+    input.read(pixels.data(), pixels.size());
+
+
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_3D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_R8, 128, 64, 64, 0, GL_RED, GL_UNSIGNED_BYTE, pixels.data());
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
     const glm::vec3 cloud_bbox_min{-2.f, -1.f, -1.f};
     const glm::vec3 cloud_bbox_max{ 2.f,  1.f,  1.f};
@@ -357,6 +422,11 @@ int main() try
         glUniform3fv(bbox_max_location, 1, reinterpret_cast<const float *>(&cloud_bbox_max));
         glUniform3fv(camera_position_location, 1, reinterpret_cast<float *>(&camera_position));
         glUniform3fv(light_direction_location, 1, reinterpret_cast<float *>(&light_direction));
+
+        glUniform1i(texture_location, 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_3D, texture);
+
 
         glBindVertexArray(vao);
         glDrawElements(GL_TRIANGLES, std::size(cube_indices), GL_UNSIGNED_INT, nullptr);

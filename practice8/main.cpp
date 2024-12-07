@@ -77,6 +77,10 @@ uniform vec3 albedo;
 uniform vec3 sun_direction;
 uniform vec3 sun_color;
 
+uniform sampler2DShadow tex;
+uniform mat4 shadow_proj;
+uniform mat4 model;
+
 in vec3 position;
 in vec3 normal;
 
@@ -99,9 +103,84 @@ vec3 phong(vec3 direction) {
 
 void main()
 {
+    vec4 ndc = shadow_proj * vec4(position, 1.0);
     float ambient_light = 0.2;
-    vec3 color = albedo * ambient_light + sun_color * phong(sun_direction);
-    out_color = vec4(color, 1.0);
+    vec3 color = albedo * ambient_light;
+    vec3 light_direction = normalize(sun_direction);
+
+    vec3 sum = vec3(0.0);
+    float sum_w = 0.0;
+    const int N = 5;
+    float radius = 3.0;
+
+    if (abs(ndc.x) < 1 && abs(ndc.y) < 1) {
+        for (int x = -N; x <= N; ++x) {
+            for (int y = -N; y <= N; ++y) {
+                vec2 offset = vec2(x,y) / vec2(textureSize(tex, 0));
+                float c = exp(-float(x*x + y*y) / (radius*radius));
+                sum += c * texture(tex, vec3(ndc.xy * 0.5 + 0.5 + offset, ndc.z * 0.5 + 0.5));
+                sum_w += c;
+            }
+        }
+        out_color = vec4(color + sun_color * phong(light_direction) * sum / sum_w, 1.0);
+    } else {
+        out_color = vec4(color + sun_color * phong(light_direction), 1.0);
+    }
+}
+)";
+
+const char vertex_source[] =
+R"(#version 330 core
+const vec2 VERTICES[6] = vec2[6](
+    vec2(-1.0, -1.0),
+    vec2(-0.5, -1.0),
+    vec2(-1.0, -0.5),
+    vec2(-1.0, -0.5),
+    vec2(-0.5, -1.0),
+    vec2(-0.5, -0.5)
+);
+
+out vec2 texcoord;
+
+void main()
+{
+    gl_Position = vec4(VERTICES[gl_VertexID], 0.0, 1.0);
+    texcoord = 2 * (VERTICES[gl_VertexID] + vec2(1.0));
+}
+)";
+
+const char fragment_source[] =
+    R"(#version 330 core
+
+uniform sampler2D tex;
+in vec2 texcoord;
+
+layout (location = 0) out vec4 out_color;
+
+void main()
+{
+    out_color = vec4(texture(tex, texcoord).r);
+}
+)";
+
+const char vertex_light_source[] =
+        R"(#version 330 core
+uniform mat4 model;
+uniform mat4 shadow_projection;
+
+layout (location = 0) in vec3 in_position;
+layout (location = 1) in vec3 in_normal;
+
+void main()
+{
+    gl_Position = shadow_projection * model * vec4(in_position, 1.0);
+}
+)";
+
+const char fragment_light_source[] =
+        R"(#version 330 core
+void main()
+{
 }
 )";
 
@@ -194,6 +273,7 @@ try
     GLuint albedo_location = glGetUniformLocation(program, "albedo");
     GLuint sun_direction_location = glGetUniformLocation(program, "sun_direction");
     GLuint sun_color_location = glGetUniformLocation(program, "sun_color");
+    GLuint shadow_project_location = glGetUniformLocation(program, "shadow_proj");
 
     std::string project_root = PROJECT_ROOT;
     std::string scene_path = project_root + "/buddha.obj";
@@ -215,6 +295,38 @@ try
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(obj_data::vertex), (void *)(0));
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(obj_data::vertex), (void *)(12));
+
+    auto vertex_shader_light = create_shader(GL_VERTEX_SHADER, vertex_light_source);
+    auto fragment_shader_light = create_shader(GL_FRAGMENT_SHADER, fragment_light_source);
+    auto program_light = create_program(vertex_shader_light, fragment_shader_light);
+
+    GLuint model_light_loc = glGetUniformLocation(program_light, "model");
+    GLuint shadow_proj_loc = glGetUniformLocation(program_light, "shadow_projection");
+
+    GLuint depth_texture;
+    glGenTextures(1, &depth_texture);
+    glBindTexture(GL_TEXTURE_2D, depth_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 1024, 1024, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+
+    GLuint depth_framebuffer;
+    glGenFramebuffers(1, &depth_framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, depth_framebuffer);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth_texture, 0);
+
+    if(glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        throw std::runtime_error("Framebuffer is not complete");
+
+    auto vertex_shader_debug = create_shader(GL_VERTEX_SHADER, vertex_source);
+    auto fragment_shader_debug = create_shader(GL_FRAGMENT_SHADER, fragment_source);
+    auto program_screen = create_program(vertex_shader_debug, fragment_shader_debug);
+    GLuint vao;
+    glGenVertexArrays(1, &vao);
 
     auto last_frame_start = std::chrono::high_resolution_clock::now();
 
@@ -269,13 +381,6 @@ try
         if (button_down[SDLK_RIGHT])
             camera_angle -= 2.f * dt;
 
-        glViewport(0, 0, width, height);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glClearColor(0.8f, 0.8f, 1.f, 0.f);
-
-        glEnable(GL_DEPTH_TEST);
-        glEnable(GL_CULL_FACE);
-
         float near = 0.1f;
         float far = 100.f;
 
@@ -294,11 +399,41 @@ try
 
         glm::vec3 sun_direction = glm::normalize(glm::vec3(std::sin(time * 0.5f), 2.f, std::cos(time * 0.5f)));
 
+        auto light_z = -sun_direction;
+        auto light_x = glm::cross(light_z, {1.f, 0.f, 0.f});
+        auto light_y = glm::cross(light_x, light_z);
+        auto light_proj = glm::mat4(glm::transpose(glm::mat3(light_x, light_y, light_z)));
+
+        // shadow map
+        glViewport(0, 0, 1024, 1024);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, depth_framebuffer);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glCullFace(GL_FRONT);
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+        glUseProgram(program_light);
+
+        glUniformMatrix4fv(model_light_loc, 1, GL_FALSE, reinterpret_cast<float *>(&model));
+        glUniformMatrix4fv(shadow_proj_loc, 1, GL_FALSE, reinterpret_cast<float *>(&light_proj));
+
+        glBindVertexArray(scene_vao);
+        glDrawElements(GL_TRIANGLES, scene.indices.size(), GL_UNSIGNED_INT, nullptr);
+
+        // scene
+        glViewport(0, 0, width, height);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glClearColor(0.8f, 0.8f, 1.f, 0.f);
+
+        glCullFace(GL_BACK);
+        glEnable(GL_CULL_FACE);
+
         glUseProgram(program);
 
         glUniformMatrix4fv(model_location, 1, GL_FALSE, reinterpret_cast<float *>(&model));
         glUniformMatrix4fv(view_location, 1, GL_FALSE, reinterpret_cast<float *>(&view));
         glUniformMatrix4fv(projection_location, 1, GL_FALSE, reinterpret_cast<float *>(&projection));
+        glUniformMatrix4fv(shadow_project_location, 1, GL_FALSE, reinterpret_cast<float *>(&light_proj));
         glUniform3fv(camera_position_location, 1, (float *)(&camera_position));
         glUniform3f(albedo_location, .8f, .7f, .6f);
         glUniform3f(sun_color_location, 1.f, 1.f, 1.f);
@@ -306,6 +441,13 @@ try
 
         glBindVertexArray(scene_vao);
         glDrawElements(GL_TRIANGLES, scene.indices.size(), GL_UNSIGNED_INT, nullptr);
+
+        // debug
+        glUseProgram(program_screen);
+        glBindVertexArray(vao);
+        glBindTexture(GL_TEXTURE_2D, depth_texture);
+        glDisable(GL_DEPTH_TEST);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
 
         SDL_GL_SwapWindow(window);
     }
